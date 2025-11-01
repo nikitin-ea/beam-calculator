@@ -1,0 +1,20 @@
+{
+    "LOGGING": {
+        "path": "/logs/app.log",
+        "console_level": "INFO",
+        "file_level": "DEBUG",
+        "colorize": true,
+        "rotation": "10 MB",
+        "retention": "14 days"
+    },
+    "INTEGRATION": {
+        "verbose": 2,
+        "maxnodes": 1e6,
+        "res_tolerance": 1e-5,
+        "bc_tolerance": 1e-5
+    },
+    "PRINTING": {
+        "dz": 0.1,
+        "fontsize": 12
+    }
+}

@@ -4,7 +4,6 @@ Created on Sun Oct 12 14:36:42 2025
 
 @author: devoi
 """
-import sys
 import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -12,64 +11,13 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from loguru import logger
 from dataclasses import dataclass
-from scipy.integrate import solve_bvp
+
+from scipy.integrate import solve_bvp, simpson
 
 
-plt.rcParams['hatch.linewidth'] = 0.5
-plt.rcParams['font.size'] = 12
-plt.rcParams["font.family"] = "serif"
-plt.rcParams["font.serif"] = ["Times New Roman"]
-plt.rcParams["mathtext.fontset"] = "stix"
-plt.rcParams["axes.grid"] = True
+import utils
 
-CONSOLE_FMT = (
-    "<green>{time:DD.MM.YYYY | HH:mm:ss}</green> | "
-    "<level>{level: <8}</level> | "
-    "<level>{message}</level>"
-)
-FILE_FMT = (
-    "{time:DD.MM.YYYY | HH:mm:ss} | "
-    "{level: <8} | "
-    "{name}:{function}:{line} - {message}"
-)
-
-VERBOSE = 2
-MAXNODES = 1e6
-TOL = 1e-5
-BCTOL = 1e-5
-
-# Log file path
-log_path = Path("logs/app.log")
-log_dir = log_path.parent
-log_dir.mkdir(parents=True, exist_ok=True)
-
-# Remove default handler and add our sinks
-logger.remove()
-
-# Console: colored, same format, DEBUG level
-logger.add(
-    sys.stdout,
-    level="DEBUG",          # change to "INFO" if you want less verbose console
-    colorize=True,
-    format=CONSOLE_FMT,
-    enqueue=True,
-    backtrace=True,
-    diagnose=True,
-)
-
-# File: DEBUG level
-logger.add(
-    log_path,
-    level="DEBUG",
-    format=FILE_FMT,
-    encoding="utf-8",
-    rotation="10 MB",       # optional rotation
-    retention="14 days",    # optional retention
-    enqueue=True,
-    backtrace=True,
-    diagnose=True,
-)
-
+settings = utils.Settings("settings.json")
 
 def dirac_delta(z, m=1000.0, diff=0):
     if diff == 0:
@@ -200,8 +148,8 @@ def get_reactions(beam_data):
     for i in range(num_of_reactions):
         for j in range(i, num_of_reactions):
             compliance[i, j] = get_compliance(i, j, beam_data)
-            rhs[i] = -get_compliance_rhs(i, beam_data)
-    compliance = np.where(compliance, compliance, compliance.T)
+        rhs[i] = -get_compliance_rhs(i, beam_data)
+    compliance = np.where(compliance, compliance, compliance.T) # сборка симметричной матрицы из верхнетреугольной
     return np.linalg.solve(compliance, rhs)
 
 
@@ -214,10 +162,10 @@ def get_compliance_rhs(i, beam_data):
                     lambda ya, yb: bc_bvp(ya, yb, beam_data),
                     x=beam_data.zi,
                     y=np.zeros((4, beam_data.n_pts)),
-                    verbose=VERBOSE,
-                    max_nodes=MAXNODES,
-                    tol=TOL,
-                    bc_tol=BCTOL)
+                    verbose=settings.VERBOSE,
+                    max_nodes=settings.MAXNODES,
+                    tol=settings.TOL,
+                    bc_tol=settings.BCTOL)
     logger.warning(sol.message)
     if beam_data.int_bc[i][1] == "pin":
         return np.interp(beam_data.int_bc[i][0],
@@ -245,10 +193,10 @@ def get_compliance(i, j, beam_data):
                     lambda ya, yb: bc_bvp(ya, yb, beam_data),
                     x=beam_data.zi,
                     y=np.zeros((4, beam_data.n_pts)),
-                    verbose=VERBOSE,
-                    max_nodes=MAXNODES,
-                    tol=TOL,
-                    bc_tol=BCTOL)
+                    verbose=settings.VERBOSE,
+                    max_nodes=settings.MAXNODES,
+                    tol=settings.TOL,
+                    bc_tol=settings.BCTOL)
     logger.warning(sol.message)
     if beam_data.int_bc[i][1] == "pin":
         return np.interp(beam_data.int_bc[j][0], sol.x, sol.y[BeamState.v])
@@ -280,10 +228,10 @@ def solve(beam_data):
                     lambda ya, yb: bc_bvp(ya, yb, beam_data),
                     x=beam_data.zi,
                     y=np.zeros((4, beam_data.n_pts)),
-                    verbose=VERBOSE,
-                    max_nodes=MAXNODES,
-                    tol=TOL,
-                    bc_tol=BCTOL)
+                    verbose=settings.VERBOSE,
+                    max_nodes=settings.MAXNODES,
+                    tol=settings.TOL,
+                    bc_tol=settings.BCTOL)
     logger.warning(sol.message)
     if r is None:
         return sol.x, sol.y, None
@@ -295,23 +243,51 @@ def solve(beam_data):
                          lambda ya, yb: bc_bvp(ya, yb, beam_data),
                          x=beam_data.zi,
                          y=np.zeros((4, beam_data.n_pts)),
-                         verbose=VERBOSE,
-                         max_nodes=MAXNODES,
-                         tol=TOL,
-                         bc_tol=BCTOL)
+                         verbose=settings.VERBOSE,
+                         max_nodes=settings.MAXNODES,
+                         tol=settings.TOL,
+                         bc_tol=settings.BCTOL)
         logger.warning(solr.message)
         return solr.x, solr.y, r
+    
+
+def calculate_energy_balance(z, y, beam_data):
+    U_bend = 0.5 * simpson(y[BeamState.M]**2, z)
+    U_found = 0.5 * simpson(beam_data.found_stiff(z) *
+                            y[BeamState.v]**2, z)
+    W_ext = 0.5 * (simpson(distrib_load_total(z, r, "q") *
+                           y[BeamState.v] +
+                           distrib_load_total(z, r, "m") *
+                           y[BeamState.theta], z)) # по краям!!!
+    return U_bend, U_found, W_ext
 
 
-if __name__ == "__main__":
-    variant = 13
-    length = "long"
-    in_file = f"vars/var{variant}_{length}.json"
-    out_file = f"out/out{variant}_{length}"
-    beam_data = import_data(in_file)
+def print_to_file(out_file, z, y, beam_data, U_bend, U_found, W_ext):
+    print_pts = int(beam_data.z[-1] / settings.DZ + 1)
+    z_print = np.linspace(0.0, beam_data.z[-1], print_pts)
 
-    z, y, r = solve(beam_data)
+    with open(f"{out_file}.dat", mode="w", encoding="utf-8") as file:
+        header = f"""{'№':>3s} {'z/L':^12s} {'v':^12s} {'ϑ':^12s} {'Q':^12s} {'M':^12s}
+====================================================================
+"""
+        print(header)
+        file.write(header)
+        for i, zi in enumerate(z_print):
+            vi = np.interp(zi, z, y[BeamState.v])
+            ti = np.interp(zi, z, y[BeamState.theta])
+            Qi = np.interp(zi, z, y[BeamState.Q])
+            Mi = np.interp(zi, z, y[BeamState.M])
+            row = f"{i:3d} {zi: 10.5E} {vi: 10.5E} {ti: 10.5E} {Qi: 10.5E} {Mi: 10.5E}"
+            print(row)
+            file.write(row + "\n")
+        file.write("\n===============================\n")
+        file.write(f"Bending energy   : {U_bend: 10.5E}\n")
+        file.write(f"Foundation energy: {U_found: 10.5E}\n")
+        file.write(f"Total energy     : {(U_bend + U_found): 10.5E}\n")
+        file.write(f"External work    : {W_ext: 10.5E}")
 
+
+def plot_to_file(out_file, z, y):
     plot_data = [{"coord": (0, 0),
                   "x_data": z,
                   "y_data": y[BeamState.v],
@@ -355,33 +331,18 @@ if __name__ == "__main__":
     fig.tight_layout()
     fig.savefig(f"{out_file}.png", dpi=400)
 
-    U_bend = 0.5 * np.trapezoid(y[BeamState.M]**2, z)
-    U_found = 0.5 * np.trapezoid(beam_data.found_stiff(z) *
-                                 y[BeamState.v]**2, z)
-    W_ext = 0.5 * np.trapezoid(distrib_load_total(z, r, "q") *
-                               y[BeamState.v] +
-                               distrib_load_total(z, r, "m") *
-                               y[BeamState.theta], z)
 
-    print_pts = 21
+if __name__ == "__main__":
+    variant = 23
+    length = "long"
+    in_file = Path(f"vars/var{variant}_{length}.json")
+    out_file = f"out/out{variant}_{length}"
+    beam_data = import_data(in_file)
 
-    with open(f"{out_file}.dat", mode="w", encoding="utf-8") as file:
-        header = f"""{'z/L':^12s} {'v':^12s} {'ϑ':^12s} {'Q':^12s} {'M':^12s}
-================================================================
-"""
-        print(header)
-        file.write(header)
-        for i in range(print_pts):
-            zi = beam_data.z[-1] * i / (print_pts - 1)
-            vi = np.interp(zi, z, y[BeamState.v])
-            ti = np.interp(zi, z, y[BeamState.theta])
-            Qi = np.interp(zi, z, y[BeamState.Q])
-            Mi = np.interp(zi, z, y[BeamState.M])
-            row = f"{zi: 10.5E} {vi: 10.5E} {ti: 10.5E} {Qi: 10.5E} {Mi: 10.5E}"
-            print(row)
-            file.write(row + "\n")
-        file.write("\n========================\n")
-        file.write(f"Bending energy   : {U_bend: 10.5E}\n")
-        file.write(f"Foundation energy: {U_found: 10.5E}\n")
-        file.write(f"Total energy     : {(U_bend + U_found): 10.5E}\n")
-        file.write(f"External work    : {W_ext: 10.5E}")
+    z, y, r = solve(beam_data)
+
+    U_bend, U_found, W_ext = calculate_energy_balance(z, y, beam_data)
+    print_to_file(out_file, z, y, beam_data, U_bend, U_found, W_ext)
+    plot_to_file(out_file, z, y)
+    
+    
